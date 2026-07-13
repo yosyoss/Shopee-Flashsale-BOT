@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+Scripts/
+Lib/
+Include/
+share/
+bin/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Chrome portable binary (too large for git, ~400MB)
+# Download manual: https://googlechromelabs.github.io/chrome-for-testing/
+chrome-portable/
+
+# User-specific Shopee cookies (DON'T COMMIT - contains session data)
+chrome-profile/
+sessions/*.json
+
+# Chromedriver download artifact
+webdriver/chromedriver.zip
+webdriver/chromedriver.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local config overrides
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+log.md
+
+# Misc
+nul
+NUL

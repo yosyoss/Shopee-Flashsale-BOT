@@ -15,8 +15,8 @@ def readFileJson(file):
 
 def writeFileJson(obj, file):
     jsonObj = json.dumps(obj, indent = 4)
-    
-    with open("sample.json", "w") as outfile:
+
+    with open(file, "w") as outfile:
         outfile.write(jsonObj)
 
 def checkModules(name):
@@ -30,7 +30,8 @@ def checkModules(name):
         print(f"{name!r} installed ✔️")
     else:
         print(f"{name!r} not found, installing ⚠️")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        # Install only the missing module, not the entire requirements file
+        subprocess.check_call([sys.executable, "-m", "pip", "install", name])
 
 
         

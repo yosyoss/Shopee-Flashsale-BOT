@@ -1,5 +1,4 @@
 import collections
-import xml.etree.ElementTree as xml
 import time
 import inquirer
 import json
@@ -45,7 +44,7 @@ def writeFileJson(obj, file):
 def headerOutput(autoCheckout, autoOrder, chromedriver, session, urlTarget, options=[], justTitle=True):
     string = f'''
 {Fore.LIGHTBLACK_EX}==========================================================
-#          {Fore.RED}Shopee Flashsale BOT {Fore.LIGHTBLACK_EX}- {Fore.WHITE}By Setiawan007         {Fore.LIGHTBLACK_EX}#
+#          {Fore.RED}Shopee Flashsale BOT {Fore.LIGHTBLACK_EX}- {Fore.WHITE}By YOS         {Fore.LIGHTBLACK_EX}#
 # ====================================================== #
 '''
     if not justTitle:
@@ -68,40 +67,23 @@ def headerOutput(autoCheckout, autoOrder, chromedriver, session, urlTarget, opti
 
 def getWebdriverList(webdriver = 'chrome'):
     if webdriver == 'chrome':
-        chromeDriverUrl = 'https://chromedriver.storage.googleapis.com/'
-        fetchChromeDriver = get(chromeDriverUrl).text
-        webdriverListXml = xml.fromstring(fetchChromeDriver)
+        # Chrome-for-Testing JSON endpoint (replaces deprecated chromedriver.storage.googleapis.com)
+        chromeDriverUrl = 'https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json'
+        fetchChromeDriver = get(chromeDriverUrl).json()
         webdriverList = {}
-        for i in range(4, len(webdriverListXml)):
-            for content in webdriverListXml[i]:
-                if '/chrome' in content.text: 
-                    driverKey = content.text.split('/')[1]
-                    driverVersion = content.text.split('/')[0]
-                    driverUrl = chromeDriverUrl + content.text 
-                    if 'win' in driverKey:
-                        if driverVersion in webdriverList:
-                            webdriverList[driverVersion]['Windows'] = driverUrl
-                        else:
-                            webdriverList[driverVersion] = {}
-                            webdriverList[driverVersion]['Windows'] = driverUrl
-                    elif 'linux' in driverKey:
-                        if driverVersion in webdriverList:
-                            webdriverList[driverVersion]['Linux'] = driverUrl
-                        else:
-                            webdriverList[driverVersion] = {}
-                            webdriverList[driverVersion]['Linux'] = driverUrl
-                    elif 'mac64.' in driverKey:
-                        if driverVersion in webdriverList:
-                            webdriverList[driverVersion]['Darwin'] = driverUrl
-                        else:
-                            webdriverList[driverVersion] = {}
-                            webdriverList[driverVersion]['Darwin'] = driverUrl
-                    elif 'mac64_m1' in driverKey:
-                        if driverVersion in webdriverList:
-                            webdriverList[driverVersion]['Darwin_m1'] = driverUrl
-                        else:
-                            webdriverList[driverVersion] = {}
-                            webdriverList[driverVersion]['Darwin_m1'] = driverUrl
+        for entry in fetchChromeDriver.get('versions', []):
+            driverVersion = entry['version']
+            downloads = entry.get('downloads', {})
+            chromedriverDownloads = downloads.get('chromedriver', [])
+            if not chromedriverDownloads:
+                continue
+            platformMap = {}
+            for dl in chromedriverDownloads:
+                platformKey = dl.get('platform')
+                if platformKey in ('win32', 'linux64', 'mac-x64', 'mac-arm64'):
+                    platformMap[platformKey] = dl.get('url')
+            if platformMap:
+                webdriverList[driverVersion] = platformMap
         webdriverList = collections.OrderedDict(sorted(webdriverList.items()))
         writeFileJson(webdriverList, './webdriver/chromedriver.json')
         return webdriverList
@@ -113,11 +95,53 @@ def getWebdriverList(webdriver = 'chrome'):
         return ['ie']
 
 
+def _platformToChromePlatform(_platform, machine=''):
+    """Map platform.system() output to Chrome-for-Testing platform key."""
+    if _platform == 'Windows':
+        return 'win32'
+    if _platform == 'Linux':
+        return 'linux64'
+    if _platform == 'Darwin':
+        # Apple Silicon (M1/M2) uses arm64
+        if 'arm' in (machine or '').lower():
+            return 'mac-arm64'
+        return 'mac-x64'
+    return None
+
+
+def _downloadChromeDriver(version, driverURL):
+    """Download and extract chromedriver zip, returning the path to the extracted binary."""
+    zipName = driverURL.split('/')[-1]
+    zipPath = './webdriver/' + zipName
+    wget.download(driverURL, out=zipPath)
+    with ZipFile(zipPath, 'r') as zip_ref:
+        zip_ref.extractall(path='webdriver/')
+    os.remove(zipPath)
+    # Extracted folder is named like 'chromedriver-win32/' containing chromedriver.exe
+    extracted_dir = './webdriver/' + zipName.replace('.zip', '')
+    binary = os.path.join(extracted_dir, 'chromedriver.exe' if platform.system() == 'Windows' else 'chromedriver')
+    return extracted_dir, binary
+
+
+def _resolveDriverUrl(version, _platform, _machine, allVersions):
+    chromePlatform = _platformToChromePlatform(_platform, _machine)
+    if chromePlatform is None:
+        raise RuntimeError(
+            f'Unsupported platform: {_platform} ({_machine}) — cannot resolve ChromeDriver download URL.'
+        )
+    if version not in allVersions or chromePlatform not in allVersions[version]:
+        raise RuntimeError(
+            f'ChromeDriver v{version} not available for {chromePlatform}.'
+        )
+    return allVersions[version][chromePlatform]
+
+
 def checkChromeDriver():
     settings = readFileJson('./config/index.json')
     chromeDriver = settings['chromedriver']
     chromeDir = readDir('./webdriver')
     _platform = platform.system()
+    _machine = platform.machine()
 
     print('[🏁] Checking ChromeDriver...\n')
     time.sleep(1)
@@ -126,39 +150,54 @@ def checkChromeDriver():
     if chromeDriver.split('/')[-1] in chromeDir:
         print(f"{Fore.WHITE}{chromeDriver!r} installed ✔️")
         time.sleep(1)
-    else:
-        print(
-            f'{Style.RESET_ALL}Chromedriver is not detected, {Fore.YELLOW}Installing.. ⚠️\n')
-        versions = getWebdriverList()
-        select_version = [inquirer.List(
-            'version', message='Select chromedriver version based on your chrome app installed.', choices=[version for version in versions])]
-        answers = inquirer.prompt(select_version)
+        return
 
-        print('\n{0}Downloading ChromeDriver {1} v{2}{3}\n'.format(
-            Fore.BLUE, _platform, answers['version'], Fore.LIGHTRED_EX))
+    print(
+        f'{Style.RESET_ALL}Chromedriver is not detected, {Fore.YELLOW}Installing.. ⚠️\n')
 
-        driverURL = readFileJson('./webdriver/chromedriver.json')
-        driverURL = driverURL[answers['version']][_platform]
-        zipName = driverURL.split('/')[-1]
+    # Fetch the latest known-good version (single call, no user picker needed)
+    print(f'{Fore.BLUE}Fetching latest known-good ChromeDriver version...')
+    latestURL = 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json'
+    latestData = get(latestURL).json()
+    stableChannel = latestData.get('channels', {}).get('Stable', {})
+    chosenVersion = stableChannel.get('version')
+    if not chosenVersion:
+        raise RuntimeError('Could not resolve latest ChromeDriver version from Chrome-for-Testing API.')
 
-        zipPath = './webdriver/' + zipName
-        wget.download(driverURL, out=zipPath)
+    print(f'{Fore.BLUE}Latest stable ChromeDriver: v{chosenVersion}')
 
-        with ZipFile(zipPath, 'r') as zip_ref:
-            zip_ref.extractall(path='webdriver/',)
+    # Build URL from the latest endpoint
+    downloads = stableChannel.get('downloads', {}).get('chromedriver', [])
+    chromePlatform = _platformToChromePlatform(_platform, _machine)
+    driverURL = None
+    for dl in downloads:
+        if dl.get('platform') == chromePlatform:
+            driverURL = dl.get('url')
+            break
+    if driverURL is None:
+        # Fallback: scan full version list
+        print(f'{Fore.YELLOW}Latest endpoint did not include {chromePlatform}, scanning full version list...')
+        allVersions = getWebdriverList()
+        driverURL = _resolveDriverUrl(chosenVersion, _platform, _machine, allVersions)
 
-        os.remove(zipPath)
+    print(f'\n{Fore.BLUE}Downloading ChromeDriver {_platform} v{chosenVersion}{Fore.LIGHTRED_EX}\n')
 
-        print(Fore.WHITE + '\nInstalled ✔️')
+    extracted_dir, binary_path = _downloadChromeDriver(chosenVersion, driverURL)
 
-        if _platform == 'Windows':
-            platform_ext = '.exe'
-        else:
-            platform_ext = ''
+    # Move binary to ./webdriver/chromedriver[.exe] to match config expectation
+    target = './webdriver/chromedriver' + ('.exe' if _platform == 'Windows' else '')
+    if os.path.exists(target):
+        os.remove(target)
+    os.replace(binary_path, target)
+    try:
+        os.rmdir(extracted_dir)
+    except OSError:
+        pass  # leave folder if non-empty (LICENSE files etc.)
 
-        settings['chromedriver'] = './webdriver/chromedriver' + platform_ext
+    print(Fore.WHITE + '\nInstalled ✔️')
 
-        writeFileJson(settings, './config/index.json')
+    settings['chromedriver'] = target
+    writeFileJson(settings, './config/index.json')
 
 def menu():
     initProgram()
@@ -227,7 +266,26 @@ def set_url():
 
     URL = [inquirer.Text('url', message='Insert Shopee Flashsale URL')]
     answer = inquirer.prompt(URL)['url']
-    settings['url'] = answer
+    if answer is None:
+        menu()
+        return
+
+    # Sanitize: strip whitespace and extract URL if user pasted a noisy string
+    cleaned = answer.strip()
+    import re as _re
+    match = _re.search(r'https?://\S+', cleaned)
+    if match:
+        cleaned = match.group(0).rstrip('.,;)')
+
+    if not cleaned.lower().startswith(('http://', 'https://')):
+        clearConsole()
+        print(Fore.LIGHTRED_EX +
+              '[ Invalid URL. It must start with http:// or https:// ]\n\n')
+        input(Fore.GREEN + '[ Back ]' + Style.RESET_ALL)
+        menu()
+        return
+
+    settings['url'] = cleaned
     writeFileJson(settings, './config/index.json')
     menu()
 
@@ -263,19 +321,22 @@ def select_session():
 def start_countdown():
     settings = readFileJson('./config/index.json')
 
-    if not settings['session']:
-        clearConsole()
-        print(Fore.LIGHTRED_EX +
-              '[ There is no account session, see README.md for steps to add session ]\n\n')
-        input(Fore.GREEN + '[ Back ]' + Style.RESET_ALL)
-        menu()
-    elif not settings['url']:
+    if not settings['url']:
         clearConsole()
         print(Fore.LIGHTRED_EX +
               '[ Please Insert Shopee Flashsale Item URL ]\n\n')
         input(Fore.GREEN + '[ Back ]' + Style.RESET_ALL)
         menu()
     else:
+        url = settings['url']
+        if not isinstance(url, str) or not url.lower().startswith(('http://', 'https://')):
+            clearConsole()
+            print(Fore.LIGHTRED_EX +
+                  f'[ Invalid URL stored in config: {url!r} ]\n'
+                  '[ Please re-enter the URL via OPTIONS > 2.2 ]\n\n')
+            input(Fore.GREEN + '[ Back ]' + Style.RESET_ALL)
+            menu()
+            return
         settings['platform'] = platform.system()
         executeScript(**settings)
 
